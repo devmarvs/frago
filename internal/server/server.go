@@ -97,7 +97,7 @@ func New(mgr *runner.Manager, port int) *bebo.App {
 		}
 
 		// Start Process
-		if err := mgr.Start(req.ProjectPath, config, req.BinaryPath); err != nil {
+		if err := mgr.Start(req.ProjectPath, config, req.BinaryPath, ""); err != nil {
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to start: %v", err)})
 		}
 

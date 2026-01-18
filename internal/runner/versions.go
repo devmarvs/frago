@@ -97,6 +97,32 @@ func GetBinaryVersion(path string) (string, error) {
 	return "Unknown", fmt.Errorf("could not parse version")
 }
 
+// FormatVersionLabel returns a user-facing label for a FrankenPHP binary.
+func FormatVersionLabel(binaryPath string, fallbackLabel string) string {
+	if fallbackLabel != "" {
+		return fallbackLabel
+	}
+
+	label := "Default (System Path)"
+	versionPath := binaryPath
+	if binaryPath == "" {
+		versionPath = DefaultFrankenPHPBinary()
+	} else {
+		label = filepath.Base(binaryPath)
+	}
+
+	if versionPath == "" {
+		return label
+	}
+
+	phpVer, err := GetBinaryVersion(versionPath)
+	if err != nil {
+		return label
+	}
+
+	return fmt.Sprintf("%s (PHP %s)", label, phpVer)
+}
+
 // GetFrankenPHPVersion returns the FrankenPHP version string (e.g. "v1.1.0").
 func GetFrankenPHPVersion(path string) (string, error) {
 	out, err := runVersionCommand(path)

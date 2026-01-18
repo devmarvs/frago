@@ -7,18 +7,22 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/devmarvs/frago/internal/caddy"
 )
 
 // Process represents a running FrankenPHP instance.
 type Process struct {
-	ID          string
-	Cmd         *exec.Cmd
-	URL         string
-	Port        int
-	ProjectPath string
-	CaddyConfig *caddy.Config
+	ID           string
+	Cmd          *exec.Cmd
+	URL          string
+	Port         int
+	ProjectPath  string
+	CaddyConfig  *caddy.Config
+	BinaryPath   string
+	VersionLabel string
+	StartedAt    time.Time
 }
 
 // Manager handles multiple FrankenPHP process states.
@@ -62,7 +66,7 @@ func DefaultFrankenPHPBinary() string {
 }
 
 // Start launches FrankenPHP in the given directory.
-func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string) error {
+func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string, versionLabel string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -71,9 +75,11 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string) err
 		return fmt.Errorf("process already running for directory: %s", dir)
 	}
 
+	selectedBinary := binaryPath
 	if binaryPath == "" {
 		binaryPath = DefaultFrankenPHPBinary()
 	}
+	displayLabel := FormatVersionLabel(selectedBinary, versionLabel)
 
 	cmd := exec.Command(binaryPath, "run", "--config", config.Path)
 	cmd.Dir = dir
@@ -85,12 +91,15 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string) err
 	}
 
 	proc := &Process{
-		ID:          dir,
-		Cmd:         cmd,
-		URL:         fmt.Sprintf("http://localhost:%d", config.Port),
-		Port:        config.Port,
-		ProjectPath: dir,
-		CaddyConfig: config,
+		ID:           dir,
+		Cmd:          cmd,
+		URL:          fmt.Sprintf("http://localhost:%d", config.Port),
+		Port:         config.Port,
+		ProjectPath:  dir,
+		CaddyConfig:  config,
+		BinaryPath:   binaryPath,
+		VersionLabel: displayLabel,
+		StartedAt:    time.Now(),
 	}
 	m.processes[dir] = proc
 
@@ -147,7 +156,7 @@ func (m *Manager) Stop(dir string) error {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
