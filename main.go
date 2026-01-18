@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/devmarvs/frago/internal/caddy"
@@ -120,6 +121,13 @@ func main() {
 		LastURL  string
 	}
 
+	actionRow := func(buttons ...fyne.CanvasObject) *fyne.Container {
+		objects := make([]fyne.CanvasObject, 0, len(buttons)+1)
+		objects = append(objects, layout.NewSpacer())
+		objects = append(objects, buttons...)
+		return container.NewHBox(objects...)
+	}
+
 	appListContainer := container.NewVBox()
 	projects := make(map[string]*projectInfo)
 	projectOrder := make([]string, 0)
@@ -159,6 +167,7 @@ func main() {
 				}
 
 				lbl := widget.NewLabel(labelText)
+				lbl.Wrapping = fyne.TextWrapBreak
 
 				pathCopy := info.Path
 				var primaryBtn *widget.Button
@@ -180,7 +189,7 @@ func main() {
 						refreshAppList()
 					}
 
-					appListContainer.Add(container.NewBorder(nil, nil, nil, container.NewHBox(primaryBtn, stopBtn), lbl))
+					appListContainer.Add(container.NewVBox(lbl, actionRow(primaryBtn, stopBtn)))
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
 						delete(projects, pathCopy)
@@ -209,7 +218,7 @@ func main() {
 						refreshAppList()
 					})
 
-					appListContainer.Add(container.NewBorder(nil, nil, nil, container.NewHBox(primaryBtn, deleteBtn), lbl))
+					appListContainer.Add(container.NewVBox(lbl, actionRow(primaryBtn, deleteBtn)))
 				}
 			}
 		}
@@ -283,9 +292,17 @@ func main() {
 	subtitle := widget.NewLabel("Launch and manage FrankenPHP projects")
 	header := container.NewVBox(title, subtitle)
 
+	projectDirField := container.NewVBox(
+		pathEntry,
+		actionRow(chooseBtn),
+	)
+	versionField := container.NewVBox(
+		versionSelect,
+		actionRow(updateBtn),
+	)
 	launchForm := widget.NewForm(
-		&widget.FormItem{Text: "Project Directory", Widget: container.NewBorder(nil, nil, nil, chooseBtn, pathEntry)},
-		&widget.FormItem{Text: "PHP Version", Widget: container.NewBorder(nil, nil, nil, updateBtn, versionSelect)},
+		&widget.FormItem{Text: "Project Directory", Widget: projectDirField},
+		&widget.FormItem{Text: "PHP Version", Widget: versionField},
 	)
 
 	launchCard := widget.NewCard("New Project", "Configure and launch FrankenPHP for your PHP application.", container.NewVBox(
