@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -35,6 +37,8 @@ const defaultVersionLabel = "Default (System Path)"
 const appID = "com.devmarvs.frago"
 const prefsStateKey = "project_state_v1"
 const defaultLogTailLines = 200
+const healthCheckTimeout = 2 * time.Second
+const healthCheckInterval = 5 * time.Second
 
 func main() {
 	// Initialize the Runner Manager
@@ -150,6 +154,12 @@ func main() {
 		Projects []storedProject `json:"projects"`
 	}
 
+	type healthInfo struct {
+		Healthy   bool
+		CheckedAt time.Time
+		LastError string
+	}
+
 	actionRow := func(buttons ...fyne.CanvasObject) *fyne.Container {
 		objects := make([]fyne.CanvasObject, 0, len(buttons)+1)
 		objects = append(objects, layout.NewSpacer())
@@ -169,6 +179,8 @@ func main() {
 	projects := make(map[string]*projectInfo)
 	projectOrder := make([]string, 0)
 	prefs := a.Preferences()
+	healthMu := sync.Mutex{}
+	healthStatus := make(map[string]healthInfo)
 
 	ensureProject := func(path string) (*projectInfo, bool) {
 		info, ok := projects[path]
@@ -302,6 +314,44 @@ func main() {
 		info.LastVersionLabel = versionLabel
 		info.LastBinaryPath = binaryPath
 		return nil
+	}
+
+	restartProject := func(info *projectInfo) error {
+		if _, exists := mgr.Get(info.Path); exists {
+			if err := mgr.Stop(info.Path); err != nil {
+				return err
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, exists := mgr.Get(info.Path); !exists {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if _, exists := mgr.Get(info.Path); exists {
+				return fmt.Errorf("timeout waiting for process to stop")
+			}
+		}
+
+		binaryPath, versionLabel := resolveStartOptions(info)
+		return startProject(info, binaryPath, versionLabel)
+	}
+
+	setHealthStatus := func(path string, healthy bool, errText string) {
+		healthMu.Lock()
+		defer healthMu.Unlock()
+		healthStatus[path] = healthInfo{
+			Healthy:   healthy,
+			CheckedAt: time.Now(),
+			LastError: errText,
+		}
+	}
+
+	getHealthStatus := func(path string) (healthInfo, bool) {
+		healthMu.Lock()
+		defer healthMu.Unlock()
+		info, ok := healthStatus[path]
+		return info, ok
 	}
 
 	parseTailCount := func(value string) int {
@@ -454,7 +504,28 @@ func main() {
 					url = "n/a"
 				}
 
-				statusLabel := widget.NewLabel(fmt.Sprintf("PHP: %s | URL: %s | Uptime: %s", versionLabel, url, formatUptime(startedAt, isRunning)))
+				statusText := "Stopped"
+				healthText := "n/a"
+				unhealthy := false
+				failed := false
+				if isRunning {
+					statusText = "Running"
+					healthText = "Checking"
+					if healthInfo, ok := getHealthStatus(info.Path); ok {
+						if healthInfo.Healthy {
+							healthText = "Healthy"
+						} else {
+							healthText = "Unhealthy"
+							unhealthy = true
+						}
+					}
+				} else if exitInfo, ok := mgr.LastExit(info.Path); ok && exitInfo.Failed {
+					statusText = "Failed"
+					healthText = "Failed"
+					failed = true
+				}
+
+				statusLabel := widget.NewLabel(fmt.Sprintf("Status: %s | Health: %s | PHP: %s | URL: %s | Uptime: %s", statusText, healthText, versionLabel, url, formatUptime(startedAt, isRunning)))
 				statusLabel.Wrapping = fyne.TextWrapBreak
 
 				copyURL := url
@@ -489,6 +560,15 @@ func main() {
 					showLogs(infoCopy)
 				})
 
+				restartBtn := widget.NewButton("Restart", func() {
+					if err := restartProject(infoCopy); err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					saveState()
+					refreshAppList()
+				})
+
 				pathCopy := info.Path
 				var primaryBtn *widget.Button
 				var actionButtons []fyne.CanvasObject
@@ -514,6 +594,9 @@ func main() {
 					}
 
 					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, stopBtn, pinBtn}
+					if unhealthy {
+						actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, restartBtn, primaryBtn, stopBtn, pinBtn}
+					}
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
 						delete(projects, pathCopy)
@@ -524,24 +607,29 @@ func main() {
 							}
 						}
 						mgr.ClearLogs(pathCopy)
+						mgr.ClearExit(pathCopy)
 						saveState()
 						refreshAppList()
 					})
 					deleteBtn.Importance = widget.DangerImportance
 
-					primaryBtn = widget.NewButton("Run", func() {
-						selectedLabel := versionSelect.Selected
-						versionLabel := selectedLabel
-						if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
-							versionLabel = ""
-						}
-						if err := startProject(infoCopy, versionMap[versionSelect.Selected], versionLabel); err != nil {
-							dialog.ShowError(err, w)
-							return
-						}
-						saveState()
-						refreshAppList()
-					})
+					if failed {
+						primaryBtn = restartBtn
+					} else {
+						primaryBtn = widget.NewButton("Run", func() {
+							selectedLabel := versionSelect.Selected
+							versionLabel := selectedLabel
+							if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
+								versionLabel = ""
+							}
+							if err := startProject(infoCopy, versionMap[versionSelect.Selected], versionLabel); err != nil {
+								dialog.ShowError(err, w)
+								return
+							}
+							saveState()
+							refreshAppList()
+						})
+					}
 
 					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, deleteBtn, pinBtn}
 				}
@@ -582,6 +670,35 @@ func main() {
 
 	// Initial refresh
 	refreshAppList()
+
+	healthClient := &http.Client{Timeout: healthCheckTimeout}
+	checkHealth := func(url string) (bool, string) {
+		if url == "" {
+			return false, "missing url"
+		}
+		resp, err := healthClient.Get(url)
+		if err != nil {
+			return false, err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			return true, ""
+		}
+		return false, fmt.Sprintf("http %d", resp.StatusCode)
+	}
+
+	go func() {
+		ticker := time.NewTicker(healthCheckInterval)
+		defer ticker.Stop()
+		for {
+			processes := mgr.List()
+			for _, proc := range processes {
+				healthy, errText := checkHealth(proc.URL)
+				setHealthStatus(proc.ProjectPath, healthy, errText)
+			}
+			<-ticker.C
+		}
+	}()
 
 	autoStartProjects := func() {
 		var errs []string

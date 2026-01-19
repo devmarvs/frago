@@ -26,11 +26,19 @@ type Process struct {
 	StartedAt    time.Time
 }
 
+type ExitInfo struct {
+	When   time.Time
+	Err    string
+	Failed bool
+}
+
 // Manager handles multiple FrankenPHP process states.
 type Manager struct {
 	mu        sync.Mutex
 	processes map[string]*Process
 	logs      map[string]*LogBuffer
+	exitInfo  map[string]ExitInfo
+	stopReq   map[string]bool
 }
 
 // NewManager creates a new process manager.
@@ -38,6 +46,8 @@ func NewManager() *Manager {
 	return &Manager{
 		processes: make(map[string]*Process),
 		logs:      make(map[string]*LogBuffer),
+		exitInfo:  make(map[string]ExitInfo),
+		stopReq:   make(map[string]bool),
 	}
 }
 
@@ -78,6 +88,9 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string, ver
 		return fmt.Errorf("process already running for directory: %s", dir)
 	}
 
+	delete(m.exitInfo, dir)
+	delete(m.stopReq, dir)
+
 	selectedBinary := binaryPath
 	if binaryPath == "" {
 		binaryPath = DefaultFrankenPHPBinary()
@@ -110,7 +123,8 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string, ver
 
 	// Monitor in background
 	go func(p *Process) {
-		p.Cmd.Wait()
+		err := p.Cmd.Wait()
+		m.recordExit(p.ID, err)
 		m.cleanup(p.ID)
 	}(proc)
 
@@ -141,10 +155,48 @@ func (m *Manager) cleanup(id string) {
 	delete(m.processes, id)
 }
 
+func (m *Manager) recordExit(id string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stopRequested := m.stopReq[id]
+	if stopRequested {
+		delete(m.stopReq, id)
+	}
+
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+
+	m.exitInfo[id] = ExitInfo{
+		When:   time.Now(),
+		Err:    msg,
+		Failed: err != nil && !stopRequested,
+	}
+}
+
+func (m *Manager) LastExit(dir string) (ExitInfo, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, ok := m.exitInfo[dir]
+	return info, ok
+}
+
+func (m *Manager) ClearExit(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.exitInfo, dir)
+	delete(m.stopReq, dir)
+}
+
 // Stop terminates the running process for a specific directory.
 func (m *Manager) Stop(dir string) error {
 	m.mu.Lock()
 	proc, exists := m.processes[dir]
+	if exists {
+		m.stopReq[dir] = true
+	}
 	// Unlock before killing to avoid deadlock in cleanup (which also locks)
 	// Actually, Start() creates a goroutine that waits.
 	// If we kill, wait returns, cleanup is called.
@@ -158,6 +210,9 @@ func (m *Manager) Stop(dir string) error {
 
 	if proc.Cmd.Process != nil {
 		if err := proc.Cmd.Process.Kill(); err != nil {
+			m.mu.Lock()
+			delete(m.stopReq, dir)
+			m.mu.Unlock()
 			return err
 		}
 	}
