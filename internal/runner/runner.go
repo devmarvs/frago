@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,12 +30,14 @@ type Process struct {
 type Manager struct {
 	mu        sync.Mutex
 	processes map[string]*Process
+	logs      map[string]*LogBuffer
 }
 
 // NewManager creates a new process manager.
 func NewManager() *Manager {
 	return &Manager{
 		processes: make(map[string]*Process),
+		logs:      make(map[string]*LogBuffer),
 	}
 }
 
@@ -81,10 +84,12 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string, ver
 	}
 	displayLabel := FormatVersionLabel(selectedBinary, versionLabel)
 
+	logBuffer := m.getOrCreateLogBufferLocked(dir)
+
 	cmd := exec.Command(binaryPath, "run", "--config", config.Path)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(os.Stdout, logBuffer)
+	cmd.Stderr = io.MultiWriter(os.Stderr, logBuffer)
 
 	if err := cmd.Start(); err != nil {
 		return err

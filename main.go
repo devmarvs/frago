@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +34,7 @@ const fyneVersion = "v2.7.2"
 const defaultVersionLabel = "Default (System Path)"
 const appID = "com.devmarvs.frago"
 const prefsStateKey = "project_state_v1"
+const defaultLogTailLines = 200
 
 func main() {
 	// Initialize the Runner Manager
@@ -300,6 +303,88 @@ func main() {
 		info.LastBinaryPath = binaryPath
 		return nil
 	}
+
+	parseTailCount := func(value string) int {
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return defaultLogTailLines
+		}
+		return n
+	}
+
+	showLogs := func(info *projectInfo) {
+		tailOptions := []string{"50", "200", "500", "1000"}
+		tailSelect := widget.NewSelect(tailOptions, nil)
+		tailSelect.SetSelected(fmt.Sprintf("%d", defaultLogTailLines))
+
+		logEntry := widget.NewMultiLineEntry()
+		logEntry.Wrapping = fyne.TextWrapBreak
+		logEntry.Disable()
+
+		updateLogs := func() {
+			lines := parseTailCount(tailSelect.Selected)
+			text := mgr.TailLogs(info.Path, lines)
+			if text == "" {
+				text = "No logs yet."
+			}
+			logEntry.SetText(text)
+		}
+
+		tailSelect.OnChanged = func(string) {
+			updateLogs()
+		}
+
+		refreshBtn := widget.NewButton("Refresh", func() {
+			updateLogs()
+		})
+
+		copyBtn := widget.NewButton("Copy", func() {
+			updateLogs()
+			w.Clipboard().SetContent(logEntry.Text)
+		})
+
+		exportBtn := widget.NewButton("Export", func() {
+			updateLogs()
+			save := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if writer == nil {
+					return
+				}
+				defer writer.Close()
+				if _, err := writer.Write([]byte(logEntry.Text)); err != nil {
+					dialog.ShowError(err, w)
+				}
+			}, w)
+
+			base := filepath.Base(info.Path)
+			if base == "" || base == "." || base == string(filepath.Separator) {
+				base = "frago"
+			}
+			save.SetFileName(fmt.Sprintf("%s.log", base))
+			save.Show()
+		})
+
+		controls := container.NewHBox(
+			widget.NewLabel("Tail"),
+			tailSelect,
+			refreshBtn,
+			layout.NewSpacer(),
+			copyBtn,
+			exportBtn,
+		)
+
+		logScroll := container.NewScroll(logEntry)
+		logScroll.SetMinSize(fyne.NewSize(0, 260))
+
+		content := container.NewBorder(controls, nil, nil, nil, logScroll)
+		logDialog := dialog.NewCustom(fmt.Sprintf("Logs - %s", filepath.Base(info.Path)), "Close", content, w)
+		logDialog.Resize(fyne.NewSize(720, 480))
+		updateLogs()
+		logDialog.Show()
+	}
 	var refreshAppList func()
 
 	refreshAppList = func() {
@@ -400,6 +485,10 @@ func main() {
 					refreshAppList()
 				}
 
+				logsBtn := widget.NewButton("Logs", func() {
+					showLogs(infoCopy)
+				})
+
 				pathCopy := info.Path
 				var primaryBtn *widget.Button
 				var actionButtons []fyne.CanvasObject
@@ -424,7 +513,7 @@ func main() {
 						refreshAppList()
 					}
 
-					actionButtons = []fyne.CanvasObject{autoStartCheck, primaryBtn, stopBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, stopBtn, pinBtn}
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
 						delete(projects, pathCopy)
@@ -434,6 +523,7 @@ func main() {
 								break
 							}
 						}
+						mgr.ClearLogs(pathCopy)
 						saveState()
 						refreshAppList()
 					})
@@ -453,7 +543,7 @@ func main() {
 						refreshAppList()
 					})
 
-					actionButtons = []fyne.CanvasObject{autoStartCheck, primaryBtn, deleteBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, deleteBtn, pinBtn}
 				}
 
 				appListContainer.Add(container.NewVBox(lbl, statusRow, actionRow(actionButtons...)))
