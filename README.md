@@ -68,7 +68,7 @@
    - **Open**: Launches the running site in your browser.
    - **Stop**: Halts the FrankenPHP process.
    - **Run**: Starts a stopped project again.
-   - **Delete**: Removes a stopped project from the list.
+   - **Delete**: Removes a stopped project from the list and deletes its `Caddyfile`.
    - **Auto-start**: Toggle to automatically run a project on app launch.
    - **Start All**: Launches all saved projects that are not currently running.
    - **Logs**: View the latest log lines and copy/export them.

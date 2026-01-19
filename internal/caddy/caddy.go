@@ -1,6 +1,7 @@
 package caddy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -122,7 +123,7 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}) (*Config, error) {
 					return &Config{Path: path, Port: currentPort, IsNew: false}, nil
 				}
 			} else {
-			return &Config{Path: path, Port: currentPort, IsNew: false}, nil
+				return &Config{Path: path, Port: currentPort, IsNew: false}, nil
 			}
 		}
 
@@ -167,6 +168,19 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}) (*Config, error) {
 	}
 
 	return nil, fmt.Errorf("could not find port definition in existing Caddyfile")
+}
+
+func RemoveCaddyfile(dir string) error {
+	path := filepath.Join(dir, "Caddyfile")
+	backup := path + ".bak"
+	return errors.Join(removeIfExists(path), removeIfExists(backup))
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func parseAddressPort(addr string) (string, int, bool) {

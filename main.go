@@ -599,6 +599,10 @@ func main() {
 					}
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
+						if err := caddy.RemoveCaddyfile(pathCopy); err != nil {
+							dialog.ShowError(fmt.Errorf("remove caddyfile: %w", err), w)
+							return
+						}
 						delete(projects, pathCopy)
 						for i, pth := range projectOrder {
 							if pth == pathCopy {
