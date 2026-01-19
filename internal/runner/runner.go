@@ -97,7 +97,7 @@ func (m *Manager) Start(dir string, config *caddy.Config, binaryPath string, ver
 		Port:         config.Port,
 		ProjectPath:  dir,
 		CaddyConfig:  config,
-		BinaryPath:   binaryPath,
+		BinaryPath:   selectedBinary,
 		VersionLabel: displayLabel,
 		StartedAt:    time.Now(),
 	}

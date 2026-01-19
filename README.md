@@ -16,6 +16,7 @@
   - Prevents conflicts between running projects and other system applications.
 - 📄 **Zero-Config Caddyfile**: Automatically generates and manages `Caddyfile` configurations for your projects.
 - 🔄 **Auto-Refresh Status**: Periodic UI updates for running/stopped status.
+- ▶️ **Auto-Start & Start All**: Toggle auto-start per project and launch all saved projects at once.
 - 🛠 **Developer Friendly**: "Open in Browser" shortcuts and quick management actions.
 
 ## Prerequisites
@@ -66,6 +67,8 @@
    - **Stop**: Halts the FrankenPHP process.
    - **Run**: Starts a stopped project again.
    - **Delete**: Removes a stopped project from the list.
+   - **Auto-start**: Toggle to automatically run a project on app launch.
+   - **Start All**: Launches all saved projects that are not currently running.
    - **Refresh List**: Manually refreshes the running list (auto-refresh is also enabled).
 
 ## Architecture

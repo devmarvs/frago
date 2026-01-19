@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -28,6 +30,8 @@ var appVersion = "dev"
 const beboVersion = "v0.1.0"
 const fyneVersion = "v2.7.2"
 const defaultVersionLabel = "Default (System Path)"
+const appID = "com.devmarvs.frago"
+const prefsStateKey = "project_state_v1"
 
 func main() {
 	// Initialize the Runner Manager
@@ -46,7 +50,7 @@ func main() {
 		}
 	}()
 
-	a := app.New()
+	a := app.NewWithID(appID)
 
 	windowTitle := "Frago - FrankenPHP Launcher (Powered by Bebo)"
 	if runtime.GOOS == "darwin" {
@@ -82,12 +86,6 @@ func main() {
 
 	versionSelect := widget.NewSelect(versionOptions, nil)
 	versionSelect.SetSelected(versionOptions[0])
-	currentVersionLabel := func() string {
-		if versionSelect.Selected == defaultVersionLabel {
-			return ""
-		}
-		return versionSelect.Selected
-	}
 
 	// Update Checker
 	var updateBtn *widget.Button
@@ -128,8 +126,25 @@ func main() {
 		LastPort         int
 		LastURL          string
 		LastVersionLabel string
+		LastBinaryPath   string
 		Pinned           bool
+		AutoStart        bool
 		LastUsed         time.Time
+	}
+
+	type storedProject struct {
+		Path             string `json:"path"`
+		LastPort         int    `json:"last_port,omitempty"`
+		LastURL          string `json:"last_url,omitempty"`
+		LastVersionLabel string `json:"last_version_label,omitempty"`
+		LastBinaryPath   string `json:"last_binary_path,omitempty"`
+		Pinned           bool   `json:"pinned,omitempty"`
+		AutoStart        bool   `json:"auto_start,omitempty"`
+		LastUsedUnix     int64  `json:"last_used_unix,omitempty"`
+	}
+
+	type storedState struct {
+		Projects []storedProject `json:"projects"`
 	}
 
 	actionRow := func(buttons ...fyne.CanvasObject) *fyne.Container {
@@ -150,16 +165,17 @@ func main() {
 	recentListContainer := container.NewVBox()
 	projects := make(map[string]*projectInfo)
 	projectOrder := make([]string, 0)
+	prefs := a.Preferences()
 
-	ensureProject := func(path string) *projectInfo {
+	ensureProject := func(path string) (*projectInfo, bool) {
 		info, ok := projects[path]
 		if ok {
-			return info
+			return info, false
 		}
 		info = &projectInfo{Path: path}
 		projects[path] = info
 		projectOrder = append(projectOrder, path)
-		return info
+		return info, true
 	}
 
 	sortedProjects := func() []*projectInfo {
@@ -191,6 +207,99 @@ func main() {
 
 		return list
 	}
+
+	saveState := func() {
+		state := storedState{
+			Projects: make([]storedProject, 0, len(projectOrder)),
+		}
+		for _, path := range projectOrder {
+			info := projects[path]
+			if info == nil {
+				continue
+			}
+			lastUsed := int64(0)
+			if !info.LastUsed.IsZero() {
+				lastUsed = info.LastUsed.Unix()
+			}
+			state.Projects = append(state.Projects, storedProject{
+				Path:             info.Path,
+				LastPort:         info.LastPort,
+				LastURL:          info.LastURL,
+				LastVersionLabel: info.LastVersionLabel,
+				LastBinaryPath:   info.LastBinaryPath,
+				Pinned:           info.Pinned,
+				AutoStart:        info.AutoStart,
+				LastUsedUnix:     lastUsed,
+			})
+		}
+		raw, err := json.Marshal(state)
+		if err != nil {
+			fmt.Printf("Failed to save project state: %v\n", err)
+			return
+		}
+		prefs.SetString(prefsStateKey, string(raw))
+	}
+
+	loadState := func() {
+		raw := prefs.String(prefsStateKey)
+		if raw == "" {
+			return
+		}
+		var state storedState
+		if err := json.Unmarshal([]byte(raw), &state); err != nil {
+			fmt.Printf("Failed to load project state: %v\n", err)
+			return
+		}
+		for _, stored := range state.Projects {
+			if stored.Path == "" {
+				continue
+			}
+			info, _ := ensureProject(stored.Path)
+			info.LastPort = stored.LastPort
+			info.LastURL = stored.LastURL
+			info.LastVersionLabel = stored.LastVersionLabel
+			info.LastBinaryPath = stored.LastBinaryPath
+			info.Pinned = stored.Pinned
+			info.AutoStart = stored.AutoStart
+			if stored.LastUsedUnix > 0 {
+				info.LastUsed = time.Unix(stored.LastUsedUnix, 0)
+			}
+		}
+	}
+
+	resolveStartOptions := func(info *projectInfo) (string, string) {
+		binaryPath := info.LastBinaryPath
+		versionLabel := info.LastVersionLabel
+		if strings.HasPrefix(versionLabel, defaultVersionLabel) {
+			versionLabel = ""
+		}
+		if binaryPath == "" {
+			if mapped, ok := versionMap[versionLabel]; ok {
+				binaryPath = mapped
+			} else if versionLabel != "" {
+				versionLabel = ""
+			}
+		}
+		return binaryPath, versionLabel
+	}
+
+	startProject := func(info *projectInfo, binaryPath string, versionLabel string) error {
+		caddyConfig, err := caddy.EnsureCaddyfile(info.Path, mgr.UsedPorts())
+		if err != nil {
+			return fmt.Errorf("caddyfile error: %w", err)
+		}
+
+		if err := mgr.Start(info.Path, caddyConfig, binaryPath, versionLabel); err != nil {
+			return fmt.Errorf("start error: %w", err)
+		}
+
+		info.LastPort = caddyConfig.Port
+		info.LastURL = fmt.Sprintf("http://localhost:%d", caddyConfig.Port)
+		info.LastUsed = time.Now()
+		info.LastVersionLabel = versionLabel
+		info.LastBinaryPath = binaryPath
+		return nil
+	}
 	var refreshAppList func()
 
 	refreshAppList = func() {
@@ -199,14 +308,32 @@ func main() {
 
 		processes := mgr.List()
 		running := make(map[string]*runner.Process)
+		stateDirty := false
 		for _, p := range processes {
 			running[p.ProjectPath] = p
-			info := ensureProject(p.ProjectPath)
-			info.LastPort = p.Port
-			info.LastURL = p.URL
-			info.LastVersionLabel = p.VersionLabel
+			info, created := ensureProject(p.ProjectPath)
+			if created {
+				stateDirty = true
+			}
+			if info.LastPort != p.Port {
+				info.LastPort = p.Port
+				stateDirty = true
+			}
+			if info.LastURL != p.URL {
+				info.LastURL = p.URL
+				stateDirty = true
+			}
+			if info.LastVersionLabel != p.VersionLabel {
+				info.LastVersionLabel = p.VersionLabel
+				stateDirty = true
+			}
+			if info.LastBinaryPath != p.BinaryPath {
+				info.LastBinaryPath = p.BinaryPath
+				stateDirty = true
+			}
 			if p.StartedAt.After(info.LastUsed) {
 				info.LastUsed = p.StartedAt
+				stateDirty = true
 			}
 		}
 
@@ -261,8 +388,17 @@ func main() {
 				}
 				pinBtn := widget.NewButton(pinLabel, func() {
 					infoCopy.Pinned = !infoCopy.Pinned
+					saveState()
 					refreshAppList()
 				})
+
+				autoStartCheck := widget.NewCheck("Auto-start", nil)
+				autoStartCheck.SetChecked(info.AutoStart)
+				autoStartCheck.OnChanged = func(checked bool) {
+					infoCopy.AutoStart = checked
+					saveState()
+					refreshAppList()
+				}
 
 				pathCopy := info.Path
 				var primaryBtn *widget.Button
@@ -276,6 +412,7 @@ func main() {
 					primaryBtn = widget.NewButton("Open", func() {
 						_ = runner.OpenBrowser(urlCopy)
 						infoCopy.LastUsed = time.Now()
+						saveState()
 						refreshAppList()
 					})
 
@@ -287,7 +424,7 @@ func main() {
 						refreshAppList()
 					}
 
-					actionButtons = []fyne.CanvasObject{primaryBtn, stopBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, primaryBtn, stopBtn, pinBtn}
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
 						delete(projects, pathCopy)
@@ -297,31 +434,26 @@ func main() {
 								break
 							}
 						}
+						saveState()
 						refreshAppList()
 					})
 					deleteBtn.Importance = widget.DangerImportance
 
 					primaryBtn = widget.NewButton("Run", func() {
-						caddyConfig, err := caddy.EnsureCaddyfile(pathCopy, mgr.UsedPorts())
-						if err != nil {
-							dialog.ShowError(fmt.Errorf("caddyfile error: %w", err), w)
+						selectedLabel := versionSelect.Selected
+						versionLabel := selectedLabel
+						if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
+							versionLabel = ""
+						}
+						if err := startProject(infoCopy, versionMap[versionSelect.Selected], versionLabel); err != nil {
+							dialog.ShowError(err, w)
 							return
 						}
-
-						selectedLabel := currentVersionLabel()
-						if err := mgr.Start(pathCopy, caddyConfig, versionMap[versionSelect.Selected], selectedLabel); err != nil {
-							dialog.ShowError(fmt.Errorf("start error: %w", err), w)
-							return
-						}
-
-						infoCopy.LastUsed = time.Now()
-						if selectedLabel != "" {
-							infoCopy.LastVersionLabel = selectedLabel
-						}
+						saveState()
 						refreshAppList()
 					})
 
-					actionButtons = []fyne.CanvasObject{primaryBtn, deleteBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, primaryBtn, deleteBtn, pinBtn}
 				}
 
 				appListContainer.Add(container.NewVBox(lbl, statusRow, actionRow(actionButtons...)))
@@ -332,6 +464,7 @@ func main() {
 				useBtn := widget.NewButton("Use", func() {
 					pathEntry.SetText(infoCopy.Path)
 					infoCopy.LastUsed = time.Now()
+					saveState()
 					refreshAppList()
 				})
 
@@ -341,6 +474,7 @@ func main() {
 				}
 				recentPinBtn := widget.NewButton(recentPinLabel, func() {
 					infoCopy.Pinned = !infoCopy.Pinned
+					saveState()
 					refreshAppList()
 				})
 
@@ -349,10 +483,43 @@ func main() {
 		}
 		appListContainer.Refresh()
 		recentListContainer.Refresh()
+		if stateDirty {
+			saveState()
+		}
 	}
+
+	loadState()
 
 	// Initial refresh
 	refreshAppList()
+
+	autoStartProjects := func() {
+		var errs []string
+		started := 0
+		for _, path := range projectOrder {
+			info := projects[path]
+			if info == nil || !info.AutoStart {
+				continue
+			}
+			if _, exists := mgr.Get(info.Path); exists {
+				continue
+			}
+
+			binaryPath, versionLabel := resolveStartOptions(info)
+			if err := startProject(info, binaryPath, versionLabel); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", info.Path, err))
+				continue
+			}
+			started++
+		}
+		if started > 0 {
+			saveState()
+		}
+		refreshAppList()
+		if len(errs) > 0 {
+			dialog.ShowError(fmt.Errorf("Auto-start failures:\n%s", strings.Join(errs, "\n")), w)
+		}
+	}
 
 	// Choose Folder Action
 	chooseBtn := widget.NewButton("Choose Folder", func() {
@@ -377,26 +544,20 @@ func main() {
 			return
 		}
 
-		caddyConfig, err := caddy.EnsureCaddyfile(dir, mgr.UsedPorts())
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("caddyfile error: %w", err), w)
-			return
+		info, _ := ensureProject(dir)
+		selectedLabel := versionSelect.Selected
+		versionLabel := selectedLabel
+		if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
+			versionLabel = ""
 		}
-
-		selectedLabel := currentVersionLabel()
-		if err := mgr.Start(dir, caddyConfig, versionMap[versionSelect.Selected], selectedLabel); err != nil {
-			dialog.ShowError(fmt.Errorf("start error: %w", err), w)
+		if err := startProject(info, versionMap[versionSelect.Selected], versionLabel); err != nil {
+			dialog.ShowError(err, w)
 			return
-		}
-
-		info := ensureProject(dir)
-		info.LastUsed = time.Now()
-		if selectedLabel != "" {
-			info.LastVersionLabel = selectedLabel
 		}
 
 		// Clear entry and refresh list
 		pathEntry.SetText("")
+		saveState()
 		refreshAppList()
 	})
 	runBtn.Importance = widget.HighImportance
@@ -415,6 +576,34 @@ func main() {
 	// Manual refresh button
 	refreshBtn := widget.NewButton("Refresh List", func() {
 		refreshAppList()
+	})
+
+	startAllBtn := widget.NewButton("Start All", func() {
+		var errs []string
+		started := 0
+		for _, path := range projectOrder {
+			info := projects[path]
+			if info == nil {
+				continue
+			}
+			if _, exists := mgr.Get(info.Path); exists {
+				continue
+			}
+
+			binaryPath, versionLabel := resolveStartOptions(info)
+			if err := startProject(info, binaryPath, versionLabel); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", info.Path, err))
+				continue
+			}
+			started++
+		}
+		if started > 0 {
+			saveState()
+		}
+		refreshAppList()
+		if len(errs) > 0 {
+			dialog.ShowError(fmt.Errorf("Some projects failed to start:\n%s", strings.Join(errs, "\n")), w)
+		}
 	})
 
 	apiLabel := widget.NewLabel(fmt.Sprintf("API available at http://localhost:%d", apiPort))
@@ -450,7 +639,7 @@ func main() {
 		recentScroll,
 	))
 
-	listHeader := container.NewBorder(nil, nil, nil, refreshBtn, nil)
+	listHeader := container.NewBorder(nil, nil, nil, container.NewHBox(startAllBtn, refreshBtn), nil)
 	scrollList := container.NewScroll(appListContainer)
 	scrollList.SetMinSize(fyne.NewSize(0, 300))
 
@@ -471,6 +660,13 @@ func main() {
 	)
 
 	w.SetContent(content)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		fyne.Do(func() {
+			autoStartProjects()
+		})
+	}()
+
 	aboutItem := fyne.NewMenuItem("About Frago", func() {
 		binaryPath := runner.DefaultFrankenPHPBinary()
 		frankenVer, err := runner.GetFrankenPHPVersion(binaryPath)
