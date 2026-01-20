@@ -268,3 +268,23 @@ func OpenBrowser(url string) error {
 	args = append(args, url)
 	return exec.Command(cmd, args...).Start()
 }
+
+func OpenFolder(path string) error {
+	if path == "" {
+		return fmt.Errorf("folder path is empty")
+	}
+
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "explorer"
+	case "darwin":
+		cmd = "open"
+	default: // "linux", "freebsd", "openbsd", "netbsd"
+		cmd = "xdg-open"
+	}
+	args = append(args, path)
+	return exec.Command(cmd, args...).Start()
+}

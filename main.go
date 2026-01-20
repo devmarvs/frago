@@ -560,6 +560,16 @@ func main() {
 					showLogs(infoCopy)
 				})
 
+				openFolderBtn := widget.NewButton("Open Folder", func() {
+					if err := runner.OpenFolder(infoCopy.Path); err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					infoCopy.LastUsed = time.Now()
+					saveState()
+					refreshAppList()
+				})
+
 				restartBtn := widget.NewButton("Restart", func() {
 					if err := restartProject(infoCopy); err != nil {
 						dialog.ShowError(err, w)
@@ -593,9 +603,9 @@ func main() {
 						refreshAppList()
 					}
 
-					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, stopBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, openFolderBtn, logsBtn, primaryBtn, stopBtn, pinBtn}
 					if unhealthy {
-						actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, restartBtn, primaryBtn, stopBtn, pinBtn}
+						actionButtons = []fyne.CanvasObject{autoStartCheck, openFolderBtn, logsBtn, restartBtn, primaryBtn, stopBtn, pinBtn}
 					}
 				} else {
 					deleteBtn := widget.NewButton("Delete", func() {
@@ -635,7 +645,7 @@ func main() {
 						})
 					}
 
-					actionButtons = []fyne.CanvasObject{autoStartCheck, logsBtn, primaryBtn, deleteBtn, pinBtn}
+					actionButtons = []fyne.CanvasObject{autoStartCheck, openFolderBtn, logsBtn, primaryBtn, deleteBtn, pinBtn}
 				}
 
 				appListContainer.Add(container.NewVBox(lbl, statusRow, actionRow(actionButtons...)))

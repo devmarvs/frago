@@ -20,6 +20,7 @@
 - ⏹ **Stop All**: Stop all running projects with a confirmation prompt.
 - 📋 **Project Logs**: View, copy, and export recent logs per project.
 - 🩺 **Health Status**: Health indicator with quick restart for unhealthy/failed processes.
+- 📂 **Open Folder**: Jump to a project directory from the list.
 - 🛠 **Developer Friendly**: "Open in Browser" shortcuts and quick management actions.
 
 ## Prerequisites
@@ -75,6 +76,7 @@
    - **Stop All**: Stops all running projects after confirmation.
    - **Logs**: View the latest log lines and copy/export them.
    - **Health**: Shows health status and offers a restart action when unhealthy/failed.
+   - **Open Folder**: Opens the project directory in your file manager.
    - **Refresh List**: Manually refreshes the running list (auto-refresh is also enabled).
 
 ## Architecture
