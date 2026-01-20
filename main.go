@@ -816,6 +816,33 @@ func main() {
 			dialog.ShowError(fmt.Errorf("Some projects failed to start:\n%s", strings.Join(errs, "\n")), w)
 		}
 	})
+	startAllBtn.Importance = widget.HighImportance
+
+	stopAllBtn := widget.NewButton("Stop All", func() {
+		dialog.ShowConfirm("Stop All Projects", "Stop all running projects?", func(confirm bool) {
+			if !confirm {
+				return
+			}
+			var errs []string
+			stopped := 0
+			for _, proc := range mgr.List() {
+				if err := mgr.Stop(proc.ProjectPath); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", proc.ProjectPath, err))
+					continue
+				}
+				stopped++
+			}
+			refreshAppList()
+			if len(errs) > 0 {
+				dialog.ShowError(fmt.Errorf("Some projects failed to stop:\n%s", strings.Join(errs, "\n")), w)
+				return
+			}
+			if stopped == 0 {
+				dialog.ShowInformation("Stop All", "No running projects to stop.", w)
+			}
+		}, w)
+	})
+	stopAllBtn.Importance = widget.DangerImportance
 
 	apiLabel := widget.NewLabel(fmt.Sprintf("API available at http://localhost:%d", apiPort))
 	apiLabel.TextStyle = fyne.TextStyle{Monospace: true}
@@ -850,7 +877,7 @@ func main() {
 		recentScroll,
 	))
 
-	listHeader := container.NewBorder(nil, nil, nil, container.NewHBox(startAllBtn, refreshBtn), nil)
+	listHeader := container.NewBorder(nil, nil, nil, container.NewHBox(startAllBtn, stopAllBtn, refreshBtn), nil)
 	scrollList := container.NewScroll(appListContainer)
 	scrollList.SetMinSize(fyne.NewSize(0, 300))
 

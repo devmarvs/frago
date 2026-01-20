@@ -17,6 +17,7 @@
 - 📄 **Zero-Config Caddyfile**: Automatically generates and manages `Caddyfile` configurations for your projects.
 - 🔄 **Auto-Refresh Status**: Periodic UI updates for running/stopped status.
 - ▶️ **Auto-Start & Start All**: Toggle auto-start per project and launch all saved projects at once.
+- ⏹ **Stop All**: Stop all running projects with a confirmation prompt.
 - 📋 **Project Logs**: View, copy, and export recent logs per project.
 - 🩺 **Health Status**: Health indicator with quick restart for unhealthy/failed processes.
 - 🛠 **Developer Friendly**: "Open in Browser" shortcuts and quick management actions.
@@ -71,6 +72,7 @@
    - **Delete**: Removes a stopped project from the list and deletes its `Caddyfile`.
    - **Auto-start**: Toggle to automatically run a project on app launch.
    - **Start All**: Launches all saved projects that are not currently running.
+   - **Stop All**: Stops all running projects after confirmation.
    - **Logs**: View the latest log lines and copy/export them.
    - **Health**: Shows health status and offers a restart action when unhealthy/failed.
    - **Refresh List**: Manually refreshes the running list (auto-refresh is also enabled).
