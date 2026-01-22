@@ -166,6 +166,13 @@ func main() {
 		LastError string
 	}
 
+	type processStats struct {
+		CPUPercent float64
+		RSSBytes   int64
+		CheckedAt  time.Time
+		LastError  string
+	}
+
 	actionRow := func(buttons ...fyne.CanvasObject) *fyne.Container {
 		objects := make([]fyne.CanvasObject, 0, len(buttons)+1)
 		objects = append(objects, layout.NewSpacer())
@@ -180,6 +187,20 @@ func main() {
 		return time.Since(start).Round(time.Second).String()
 	}
 
+	formatCPU := func(cpu float64) string {
+		if cpu < 0 {
+			return "n/a"
+		}
+		return fmt.Sprintf("%.1f%%", cpu)
+	}
+
+	formatRAM := func(bytes int64) string {
+		if bytes <= 0 {
+			return "n/a"
+		}
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	}
+
 	appListContainer := container.NewVBox()
 	recentListContainer := container.NewVBox()
 	projects := make(map[string]*projectInfo)
@@ -187,6 +208,8 @@ func main() {
 	prefs := a.Preferences()
 	healthMu := sync.Mutex{}
 	healthStatus := make(map[string]healthInfo)
+	statsMu := sync.Mutex{}
+	statsStatus := make(map[string]processStats)
 
 	ensureProject := func(path string) (*projectInfo, bool) {
 		info, ok := projects[path]
@@ -360,6 +383,24 @@ func main() {
 		healthMu.Lock()
 		defer healthMu.Unlock()
 		info, ok := healthStatus[path]
+		return info, ok
+	}
+
+	setProcessStats := func(path string, stats runner.ProcessStats, errText string) {
+		statsMu.Lock()
+		defer statsMu.Unlock()
+		statsStatus[path] = processStats{
+			CPUPercent: stats.CPUPercent,
+			RSSBytes:   stats.RSSBytes,
+			CheckedAt:  time.Now(),
+			LastError:  errText,
+		}
+	}
+
+	getProcessStats := func(path string) (processStats, bool) {
+		statsMu.Lock()
+		defer statsMu.Unlock()
+		info, ok := statsStatus[path]
 		return info, ok
 	}
 
@@ -563,7 +604,20 @@ func main() {
 					failed = true
 				}
 
-				statusLabel := widget.NewLabel(fmt.Sprintf("Status: %s | Health: %s | PHP: %s | URL: %s | Uptime: %s", statusText, healthText, versionLabel, url, formatUptime(startedAt, isRunning)))
+				statusLine := fmt.Sprintf("Status: %s | Health: %s | PHP: %s | URL: %s | Uptime: %s", statusText, healthText, versionLabel, url, formatUptime(startedAt, isRunning))
+				if isRunning {
+					cpuText := "n/a"
+					ramText := "n/a"
+					if statsInfo, ok := getProcessStats(info.Path); ok {
+						if statsInfo.LastError == "" || statsInfo.RSSBytes > 0 {
+							cpuText = formatCPU(statsInfo.CPUPercent)
+							ramText = formatRAM(statsInfo.RSSBytes)
+						}
+					}
+					statusLine = fmt.Sprintf("%s | CPU: %s | RAM: %s", statusLine, cpuText, ramText)
+				}
+
+				statusLabel := widget.NewLabel(statusLine)
 				statusLabel.Wrapping = fyne.TextWrapBreak
 
 				copyURL := url
@@ -755,6 +809,15 @@ func main() {
 			for _, proc := range processes {
 				healthy, errText := checkHealth(proc.URL)
 				setHealthStatus(proc.ProjectPath, healthy, errText)
+
+				if proc.Cmd != nil && proc.Cmd.Process != nil {
+					stats, err := runner.GetProcessStats(proc.Cmd.Process.Pid)
+					statsErr := ""
+					if err != nil {
+						statsErr = err.Error()
+					}
+					setProcessStats(proc.ProjectPath, stats, statsErr)
+				}
 			}
 			<-ticker.C
 		}

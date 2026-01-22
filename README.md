@@ -22,6 +22,7 @@
 - 🧭 **System Tray Controls**: Quick start/stop and recent projects menu.
 - 📋 **Project Logs**: View, copy, and export recent logs per project.
 - 🩺 **Health Status**: Health indicator with quick restart for unhealthy/failed processes.
+- 📈 **Process Stats**: View CPU and RAM usage for running projects.
 - 📂 **Open Folder**: Jump to a project directory from the list.
 - 🛠 **Developer Friendly**: "Open in Browser" shortcuts and quick management actions.
 
