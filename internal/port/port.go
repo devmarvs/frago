@@ -9,21 +9,28 @@ import (
 
 // IsPortFree checks if a specific port is available.
 func IsPortFree(port int) bool {
-	addr4 := fmt.Sprintf("0.0.0.0:%d", port)
-	ok, err := canListen("tcp4", addr4)
-	if !ok {
-		return false
+	checks := []struct {
+		network        string
+		addr           string
+		skipOnNoFamily bool
+	}{
+		{"tcp4", fmt.Sprintf("0.0.0.0:%d", port), false},
+		{"tcp4", fmt.Sprintf("127.0.0.1:%d", port), false},
+		{"tcp6", fmt.Sprintf("[::]:%d", port), true},
+		{"tcp6", fmt.Sprintf("[::1]:%d", port), true},
 	}
 
-	addr6 := fmt.Sprintf("[::]:%d", port)
-	ok, err = canListen("tcp6", addr6)
-	if ok {
-		return true
+	for _, check := range checks {
+		ok, err := canListen(check.network, check.addr)
+		if ok {
+			continue
+		}
+		if check.skipOnNoFamily && err != nil && isAddrFamilyUnsupported(err) {
+			continue
+		}
+		return false
 	}
-	if err != nil && isAddrFamilyUnsupported(err) {
-		return true
-	}
-	return false
+	return true
 }
 
 func canListen(network, addr string) (bool, error) {

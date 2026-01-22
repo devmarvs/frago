@@ -72,6 +72,8 @@ func main() {
 	// UI Elements
 	pathEntry := widget.NewEntry()
 	pathEntry.SetPlaceHolder("Select project directory...")
+	portEntry := widget.NewEntry()
+	portEntry.SetPlaceHolder("Optional (e.g., 8080)")
 
 	// Version Selector
 	versions, _ := runner.DetectVersions()
@@ -130,6 +132,7 @@ func main() {
 
 	type projectInfo struct {
 		Path             string
+		PreferredPort    int
 		LastPort         int
 		LastURL          string
 		LastVersionLabel string
@@ -141,6 +144,7 @@ func main() {
 
 	type storedProject struct {
 		Path             string `json:"path"`
+		PreferredPort    int    `json:"preferred_port,omitempty"`
 		LastPort         int    `json:"last_port,omitempty"`
 		LastURL          string `json:"last_url,omitempty"`
 		LastVersionLabel string `json:"last_version_label,omitempty"`
@@ -238,6 +242,7 @@ func main() {
 			}
 			state.Projects = append(state.Projects, storedProject{
 				Path:             info.Path,
+				PreferredPort:    info.PreferredPort,
 				LastPort:         info.LastPort,
 				LastURL:          info.LastURL,
 				LastVersionLabel: info.LastVersionLabel,
@@ -270,6 +275,7 @@ func main() {
 				continue
 			}
 			info, _ := ensureProject(stored.Path)
+			info.PreferredPort = stored.PreferredPort
 			info.LastPort = stored.LastPort
 			info.LastURL = stored.LastURL
 			info.LastVersionLabel = stored.LastVersionLabel
@@ -298,8 +304,8 @@ func main() {
 		return binaryPath, versionLabel
 	}
 
-	startProject := func(info *projectInfo, binaryPath string, versionLabel string) error {
-		caddyConfig, err := caddy.EnsureCaddyfile(info.Path, mgr.UsedPorts())
+	startProject := func(info *projectInfo, binaryPath string, versionLabel string, desiredPort int) error {
+		caddyConfig, err := caddy.EnsureCaddyfile(info.Path, mgr.UsedPorts(), desiredPort)
 		if err != nil {
 			return fmt.Errorf("caddyfile error: %w", err)
 		}
@@ -308,6 +314,7 @@ func main() {
 			return fmt.Errorf("start error: %w", err)
 		}
 
+		info.PreferredPort = desiredPort
 		info.LastPort = caddyConfig.Port
 		info.LastURL = fmt.Sprintf("http://localhost:%d", caddyConfig.Port)
 		info.LastUsed = time.Now()
@@ -334,7 +341,7 @@ func main() {
 		}
 
 		binaryPath, versionLabel := resolveStartOptions(info)
-		return startProject(info, binaryPath, versionLabel)
+		return startProject(info, binaryPath, versionLabel, info.PreferredPort)
 	}
 
 	setHealthStatus := func(path string, healthy bool, errText string) {
@@ -360,6 +367,18 @@ func main() {
 			return defaultLogTailLines
 		}
 		return n
+	}
+
+	parsePortInput := func(value string) (int, error) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return 0, nil
+		}
+		portValue, err := strconv.Atoi(value)
+		if err != nil || portValue < 1 || portValue > 65535 {
+			return 0, fmt.Errorf("port must be a number between 1 and 65535")
+		}
+		return portValue, nil
 	}
 
 	showLogs := func(info *projectInfo) {
@@ -436,6 +455,8 @@ func main() {
 		logDialog.Show()
 	}
 	var refreshAppList func()
+	var startAllBtn *widget.Button
+	var stopAllBtn *widget.Button
 
 	refreshAppList = func() {
 		appListContainer.Objects = nil
@@ -473,6 +494,20 @@ func main() {
 		}
 
 		ordered := sortedProjects()
+		if startAllBtn != nil {
+			if len(ordered) == 0 {
+				startAllBtn.Disable()
+			} else {
+				startAllBtn.Enable()
+			}
+		}
+		if stopAllBtn != nil {
+			if len(ordered) == 0 {
+				stopAllBtn.Disable()
+			} else {
+				stopAllBtn.Enable()
+			}
+		}
 		if len(ordered) == 0 {
 			appListContainer.Add(widget.NewLabel("No projects yet. Use New Project to launch one."))
 			recentListContainer.Add(widget.NewLabel("No recent projects yet."))
@@ -636,7 +671,7 @@ func main() {
 							if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
 								versionLabel = ""
 							}
-							if err := startProject(infoCopy, versionMap[versionSelect.Selected], versionLabel); err != nil {
+							if err := startProject(infoCopy, versionMap[versionSelect.Selected], versionLabel, infoCopy.PreferredPort); err != nil {
 								dialog.ShowError(err, w)
 								return
 							}
@@ -655,6 +690,11 @@ func main() {
 
 				useBtn := widget.NewButton("Use", func() {
 					pathEntry.SetText(infoCopy.Path)
+					if infoCopy.PreferredPort > 0 {
+						portEntry.SetText(fmt.Sprintf("%d", infoCopy.PreferredPort))
+					} else {
+						portEntry.SetText("")
+					}
 					infoCopy.LastUsed = time.Now()
 					saveState()
 					refreshAppList()
@@ -727,7 +767,7 @@ func main() {
 			}
 
 			binaryPath, versionLabel := resolveStartOptions(info)
-			if err := startProject(info, binaryPath, versionLabel); err != nil {
+			if err := startProject(info, binaryPath, versionLabel, info.PreferredPort); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", info.Path, err))
 				continue
 			}
@@ -759,6 +799,12 @@ func main() {
 			return
 		}
 
+		desiredPort, err := parsePortInput(portEntry.Text)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
 		// Check if already running
 		if _, exists := mgr.Get(dir); exists {
 			dialog.ShowInformation("Already Running", "This project is already running.", w)
@@ -766,18 +812,20 @@ func main() {
 		}
 
 		info, _ := ensureProject(dir)
+		info.PreferredPort = desiredPort
 		selectedLabel := versionSelect.Selected
 		versionLabel := selectedLabel
 		if strings.HasPrefix(selectedLabel, defaultVersionLabel) {
 			versionLabel = ""
 		}
-		if err := startProject(info, versionMap[versionSelect.Selected], versionLabel); err != nil {
+		if err := startProject(info, versionMap[versionSelect.Selected], versionLabel, info.PreferredPort); err != nil {
 			dialog.ShowError(err, w)
 			return
 		}
 
 		// Clear entry and refresh list
 		pathEntry.SetText("")
+		portEntry.SetText("")
 		saveState()
 		refreshAppList()
 	})
@@ -799,7 +847,7 @@ func main() {
 		refreshAppList()
 	})
 
-	startAllBtn := widget.NewButton("Start All", func() {
+	startAllBtn = widget.NewButton("Start All", func() {
 		var errs []string
 		started := 0
 		for _, path := range projectOrder {
@@ -812,7 +860,7 @@ func main() {
 			}
 
 			binaryPath, versionLabel := resolveStartOptions(info)
-			if err := startProject(info, binaryPath, versionLabel); err != nil {
+			if err := startProject(info, binaryPath, versionLabel, info.PreferredPort); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", info.Path, err))
 				continue
 			}
@@ -828,7 +876,7 @@ func main() {
 	})
 	startAllBtn.Importance = widget.HighImportance
 
-	stopAllBtn := widget.NewButton("Stop All", func() {
+	stopAllBtn = widget.NewButton("Stop All", func() {
 		dialog.ShowConfirm("Stop All Projects", "Stop all running projects?", func(confirm bool) {
 			if !confirm {
 				return
@@ -853,6 +901,7 @@ func main() {
 		}, w)
 	})
 	stopAllBtn.Importance = widget.DangerImportance
+	refreshAppList()
 
 	apiLabel := widget.NewLabel(fmt.Sprintf("API available at http://localhost:%d", apiPort))
 	apiLabel.TextStyle = fyne.TextStyle{Monospace: true}
@@ -866,12 +915,14 @@ func main() {
 		pathEntry,
 		actionRow(chooseBtn),
 	)
+	portField := container.NewVBox(portEntry)
 	versionField := container.NewVBox(
 		versionSelect,
 		actionRow(updateBtn),
 	)
 	launchForm := widget.NewForm(
 		&widget.FormItem{Text: "Project Directory", Widget: projectDirField},
+		&widget.FormItem{Text: "Port (Optional)", Widget: portField},
 		&widget.FormItem{Text: "PHP Version", Widget: versionField},
 	)
 

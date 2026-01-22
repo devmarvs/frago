@@ -14,6 +14,7 @@
 - 🔌 **Automatic Port Management**: 
   - Automatically finds free ports for your applications.
   - Prevents conflicts between running projects and other system applications.
+- 🎯 **Custom Port Selection**: Set a preferred port per project with conflict warnings.
 - 📄 **Zero-Config Caddyfile**: Automatically generates and manages `Caddyfile` configurations for your projects.
 - 🔄 **Auto-Refresh Status**: Periodic UI updates for running/stopped status.
 - ▶️ **Auto-Start & Start All**: Toggle auto-start per project and launch all saved projects at once.
@@ -59,6 +60,7 @@
 
 2. **Configure**:
    - Select the desired **PHP Version** from the dropdown (if multiple are detected).
+   - Optionally set a **Port**; Frago will warn if it is already in use.
    - Frago defaults to using the bundled FrankenPHP binary if available.
 
 3. **Run**:

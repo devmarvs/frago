@@ -16,6 +16,7 @@ import (
 type RunRequest struct {
 	ProjectPath string `json:"project_path"`
 	BinaryPath  string `json:"binary_path,omitempty"`
+	Port        int    `json:"port,omitempty"`
 }
 
 type RunResponse struct {
@@ -68,6 +69,9 @@ func New(mgr *runner.Manager, port int) *bebo.App {
 		if req.ProjectPath == "" {
 			return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "project_path is required"})
 		}
+		if req.Port != 0 && (req.Port < 1 || req.Port > 65535) {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "port must be between 1 and 65535"})
+		}
 
 		// Check directory
 		if _, err := os.Stat(req.ProjectPath); os.IsNotExist(err) {
@@ -91,7 +95,7 @@ func New(mgr *runner.Manager, port int) *bebo.App {
 		}
 
 		// Ensure Caddyfile, avoiding ports already used by managed processes
-		config, err := caddy.EnsureCaddyfile(req.ProjectPath, mgr.UsedPorts())
+		config, err := caddy.EnsureCaddyfile(req.ProjectPath, mgr.UsedPorts(), req.Port)
 		if err != nil {
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Caddyfile error: %v", err)})
 		}

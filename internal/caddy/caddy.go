@@ -20,8 +20,9 @@ type Config struct {
 
 // EnsureCaddyfile ensures a Caddyfile exists and uses a valid port.
 // usedPorts is an optional set of ports already in use by the runner.Manager.
+// desiredPort is optional; when set, it must be available or an error is returned.
 // Returns a Config struct containing details about the operation.
-func EnsureCaddyfile(dir string, usedPorts map[int]struct{}) (*Config, error) {
+func EnsureCaddyfile(dir string, usedPorts map[int]struct{}, desiredPort int) (*Config, error) {
 	path := filepath.Join(dir, "Caddyfile")
 	defaultStartPort := 8080
 	defaultEndPort := 9000
@@ -40,13 +41,38 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}) (*Config, error) {
 		}
 		return 0, fmt.Errorf("no free port in range %d-%d", start, end)
 	}
+	checkDesiredPort := func(p int) error {
+		if p <= 0 || p > 65535 {
+			return fmt.Errorf("port %d is invalid; must be between 1 and 65535", p)
+		}
+		if !port.IsPortFree(p) {
+			return fmt.Errorf("port %d is already in use", p)
+		}
+		if usedPorts != nil {
+			if _, exists := usedPorts[p]; exists {
+				return fmt.Errorf("port %d is already used by another running project", p)
+			}
+		}
+		return nil
+	}
+	hasDesired := desiredPort > 0
+
+	if hasDesired {
+		if err := checkDesiredPort(desiredPort); err != nil {
+			return nil, err
+		}
+	}
 
 	// Check if exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// Does not exist: find free port and create, avoiding usedPorts
-		p, err := findFreePort(defaultStartPort, defaultEndPort)
-		if err != nil {
-			return nil, err
+		p := desiredPort
+		if !hasDesired {
+			var err error
+			p, err = findFreePort(defaultStartPort, defaultEndPort)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		content := fmt.Sprintf(":%d {\n\troot * .\n\tphp_server\n\tfile_server\n}", p)
@@ -114,6 +140,44 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}) (*Config, error) {
 	}
 
 	if foundAddress {
+		if hasDesired {
+			if currentPort == desiredPort {
+				return &Config{Path: path, Port: currentPort, IsNew: false}, nil
+			}
+
+			updated := false
+			for i, field := range lineFields {
+				prefix, p, ok := parseAddressPort(field)
+				if ok && p == currentPort {
+					lineFields[i] = formatAddress(prefix, desiredPort)
+					updated = true
+				}
+			}
+			if !updated {
+				return nil, fmt.Errorf("could not update port in existing Caddyfile")
+			}
+
+			newLine := linePrefix + strings.Join(lineFields, " ")
+			if lineSuffix != "" {
+				newLine += " " + lineSuffix
+			}
+			lines[targetLine] = newLine
+			newContent := strings.Join(lines, "\n")
+
+			// Backup
+			backupPath := path + ".bak"
+			if err := os.WriteFile(backupPath, data, 0644); err != nil {
+				return nil, err
+			}
+
+			// Write new
+			if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+				return nil, err
+			}
+
+			return &Config{Path: path, Port: desiredPort, IsNew: false, BackupPath: backupPath}, nil
+		}
+
 		// Check if this port is free and not already used by another managed process
 		if port.IsPortFree(currentPort) {
 			if usedPorts != nil {
