@@ -19,6 +19,7 @@
 - 🔄 **Auto-Refresh Status**: Periodic UI updates for running/stopped status.
 - ▶️ **Auto-Start & Start All**: Toggle auto-start per project and launch all saved projects at once.
 - ⏹ **Stop All**: Stop all running projects with a confirmation prompt.
+- 🧭 **System Tray Controls**: Quick start/stop and recent projects menu.
 - 📋 **Project Logs**: View, copy, and export recent logs per project.
 - 🩺 **Health Status**: Health indicator with quick restart for unhealthy/failed processes.
 - 📂 **Open Folder**: Jump to a project directory from the list.

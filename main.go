@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
@@ -37,6 +38,7 @@ const defaultVersionLabel = "Default (System Path)"
 const appID = "com.devmarvs.frago"
 const prefsStateKey = "project_state_v1"
 const defaultLogTailLines = 200
+const trayRecentLimit = 5
 const healthCheckTimeout = 2 * time.Second
 const healthCheckInterval = 5 * time.Second
 
@@ -455,6 +457,7 @@ func main() {
 		logDialog.Show()
 	}
 	var refreshAppList func()
+	var refreshTrayMenu func()
 	var startAllBtn *widget.Button
 	var stopAllBtn *widget.Button
 
@@ -718,6 +721,9 @@ func main() {
 		if stateDirty {
 			saveState()
 		}
+		if refreshTrayMenu != nil {
+			refreshTrayMenu()
+		}
 	}
 
 	loadState()
@@ -847,7 +853,7 @@ func main() {
 		refreshAppList()
 	})
 
-	startAllBtn = widget.NewButton("Start All", func() {
+	startAllProjects := func() {
 		var errs []string
 		started := 0
 		for _, path := range projectOrder {
@@ -873,10 +879,9 @@ func main() {
 		if len(errs) > 0 {
 			dialog.ShowError(fmt.Errorf("Some projects failed to start:\n%s", strings.Join(errs, "\n")), w)
 		}
-	})
-	startAllBtn.Importance = widget.HighImportance
+	}
 
-	stopAllBtn = widget.NewButton("Stop All", func() {
+	stopAllProjects := func() {
 		dialog.ShowConfirm("Stop All Projects", "Stop all running projects?", func(confirm bool) {
 			if !confirm {
 				return
@@ -899,8 +904,113 @@ func main() {
 				dialog.ShowInformation("Stop All", "No running projects to stop.", w)
 			}
 		}, w)
-	})
+	}
+
+	startAllBtn = widget.NewButton("Start All", startAllProjects)
+	startAllBtn.Importance = widget.HighImportance
+
+	stopAllBtn = widget.NewButton("Stop All", stopAllProjects)
 	stopAllBtn.Importance = widget.DangerImportance
+
+	refreshTrayMenu = func() {
+		ordered := sortedProjects()
+		running := make(map[string]*runner.Process)
+		for _, proc := range mgr.List() {
+			running[proc.ProjectPath] = proc
+		}
+
+		showItem := fyne.NewMenuItem("Show Frago", func() {
+			w.Show()
+			w.RequestFocus()
+		})
+
+		startAllItem := fyne.NewMenuItem("Start All", startAllProjects)
+		stopAllItem := fyne.NewMenuItem("Stop All", stopAllProjects)
+		if len(ordered) == 0 {
+			startAllItem.Disabled = true
+			stopAllItem.Disabled = true
+		}
+
+		recentItems := make([]*fyne.MenuItem, 0, trayRecentLimit)
+		for _, info := range ordered {
+			if len(recentItems) >= trayRecentLimit {
+				break
+			}
+			infoCopy := info
+			label := filepath.Base(infoCopy.Path)
+			if label == "" || label == "." || label == string(filepath.Separator) {
+				label = infoCopy.Path
+			}
+
+			projectItem := fyne.NewMenuItem(label, nil)
+			var actions []*fyne.MenuItem
+
+			if proc, ok := running[infoCopy.Path]; ok {
+				urlCopy := proc.URL
+				openItem := fyne.NewMenuItem("Open", func() {
+					_ = runner.OpenBrowser(urlCopy)
+					infoCopy.LastUsed = time.Now()
+					saveState()
+					refreshAppList()
+				})
+				stopItem := fyne.NewMenuItem("Stop", func() {
+					if err := mgr.Stop(infoCopy.Path); err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					refreshAppList()
+				})
+				actions = append(actions, openItem, stopItem)
+			} else {
+				startItem := fyne.NewMenuItem("Start", func() {
+					binaryPath, versionLabel := resolveStartOptions(infoCopy)
+					if err := startProject(infoCopy, binaryPath, versionLabel, infoCopy.PreferredPort); err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					saveState()
+					refreshAppList()
+				})
+				actions = append(actions, startItem)
+			}
+
+			openFolderItem := fyne.NewMenuItem("Open Folder", func() {
+				if err := runner.OpenFolder(infoCopy.Path); err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				infoCopy.LastUsed = time.Now()
+				saveState()
+				refreshAppList()
+			})
+			actions = append(actions, openFolderItem)
+
+			projectItem.ChildMenu = fyne.NewMenu(label, actions...)
+			recentItems = append(recentItems, projectItem)
+		}
+
+		if len(recentItems) == 0 {
+			empty := fyne.NewMenuItem("No recent projects", nil)
+			empty.Disabled = true
+			recentItems = append(recentItems, empty)
+		}
+
+		recentItem := fyne.NewMenuItem("Recent", nil)
+		recentItem.ChildMenu = fyne.NewMenu("Recent", recentItems...)
+
+		trayMenu := fyne.NewMenu("Frago",
+			showItem,
+			fyne.NewMenuItemSeparator(),
+			startAllItem,
+			stopAllItem,
+			fyne.NewMenuItemSeparator(),
+			recentItem,
+		)
+
+		if desk, ok := a.(desktop.App); ok {
+			desk.SetSystemTrayMenu(trayMenu)
+		}
+	}
 	refreshAppList()
 
 	apiLabel := widget.NewLabel(fmt.Sprintf("API available at http://localhost:%d", apiPort))
