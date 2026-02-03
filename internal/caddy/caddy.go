@@ -18,6 +18,9 @@ type Config struct {
 	BackupPath string
 }
 
+// ErrDesiredPortUnavailable indicates a requested port cannot be used.
+var ErrDesiredPortUnavailable = errors.New("desired port unavailable")
+
 // EnsureCaddyfile ensures a Caddyfile exists and uses a valid port.
 // usedPorts is an optional set of ports already in use by the runner.Manager.
 // desiredPort is optional; when set, it must be available or an error is returned.
@@ -46,11 +49,11 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}, desiredPort int) (*
 			return fmt.Errorf("port %d is invalid; must be between 1 and 65535", p)
 		}
 		if !port.IsPortFree(p) {
-			return fmt.Errorf("port %d is already in use", p)
+			return fmt.Errorf("%w: port %d is already in use", ErrDesiredPortUnavailable, p)
 		}
 		if usedPorts != nil {
 			if _, exists := usedPorts[p]; exists {
-				return fmt.Errorf("port %d is already used by another running project", p)
+				return fmt.Errorf("%w: port %d is already used by another running project", ErrDesiredPortUnavailable, p)
 			}
 		}
 		return nil
@@ -232,6 +235,20 @@ func EnsureCaddyfile(dir string, usedPorts map[int]struct{}, desiredPort int) (*
 	}
 
 	return nil, fmt.Errorf("could not find port definition in existing Caddyfile")
+}
+
+// EnsureCaddyfileAutoPort prefers desiredPort when available and falls back to any free port otherwise.
+func EnsureCaddyfileAutoPort(dir string, usedPorts map[int]struct{}, desiredPort int) (*Config, error) {
+	cfg, err := EnsureCaddyfile(dir, usedPorts, desiredPort)
+	if err == nil {
+		return cfg, nil
+	}
+
+	if desiredPort > 0 && errors.Is(err, ErrDesiredPortUnavailable) {
+		return EnsureCaddyfile(dir, usedPorts, 0)
+	}
+
+	return nil, err
 }
 
 func RemoveCaddyfile(dir string) error {

@@ -64,3 +64,38 @@ func TestEnsureCaddyfile_DesiredPortInUse(t *testing.T) {
 		t.Fatalf("expected port in use error, got: %v", err)
 	}
 }
+
+func TestEnsureCaddyfileAutoPort_FallsBackWhenDesiredInUse(t *testing.T) {
+	dir := t.TempDir()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for port: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+	})
+	inUsePort := ln.Addr().(*net.TCPAddr).Port
+
+	cfg, err := EnsureCaddyfileAutoPort(dir, nil, inUsePort)
+	if err != nil {
+		t.Fatalf("EnsureCaddyfileAutoPort returned error: %v", err)
+	}
+	if cfg.Port == inUsePort {
+		t.Fatalf("expected fallback port, got desired in-use port %d", inUsePort)
+	}
+}
+
+func TestEnsureCaddyfileAutoPort_FallsBackWhenDesiredUsedByManager(t *testing.T) {
+	dir := t.TempDir()
+	desired := pickFreePort(t)
+	usedPorts := map[int]struct{}{desired: {}}
+
+	cfg, err := EnsureCaddyfileAutoPort(dir, usedPorts, desired)
+	if err != nil {
+		t.Fatalf("EnsureCaddyfileAutoPort returned error: %v", err)
+	}
+	if cfg.Port == desired {
+		t.Fatalf("expected fallback port, got managed in-use port %d", desired)
+	}
+}

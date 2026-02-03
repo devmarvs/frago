@@ -330,7 +330,7 @@ func main() {
 	}
 
 	startProject := func(info *projectInfo, binaryPath string, versionLabel string, desiredPort int) error {
-		caddyConfig, err := caddy.EnsureCaddyfile(info.Path, mgr.UsedPorts(), desiredPort)
+		caddyConfig, err := caddy.EnsureCaddyfileAutoPort(info.Path, mgr.UsedPorts(), desiredPort)
 		if err != nil {
 			return fmt.Errorf("caddyfile error: %w", err)
 		}

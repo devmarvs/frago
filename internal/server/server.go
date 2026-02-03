@@ -95,7 +95,7 @@ func New(mgr *runner.Manager, port int) *bebo.App {
 		}
 
 		// Ensure Caddyfile, avoiding ports already used by managed processes
-		config, err := caddy.EnsureCaddyfile(req.ProjectPath, mgr.UsedPorts(), req.Port)
+		config, err := caddy.EnsureCaddyfileAutoPort(req.ProjectPath, mgr.UsedPorts(), req.Port)
 		if err != nil {
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Caddyfile error: %v", err)})
 		}
